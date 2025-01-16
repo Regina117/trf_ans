@@ -1,0 +1,105 @@
+---
+  - name: Setup Docker
+    hosts: all
+    become: yes
+    tasks:
+      - name: Install packages
+        apt:
+          update_cache: yes
+          name: 
+            - git
+            - docker.io
+            - openjdk-11-jdk
+          state: present
+  
+      - name: Ensure Docker service is running
+        service:
+          name: docker
+          state: started
+          enabled: yes
+  
+  - name: Run build process
+    hosts: 158.160.149.247
+    become: yes
+    tasks:
+      - name: git clone repository
+        git: 
+          repo: https://github.com/geoserver/geoserver.git
+          dest: /app
+          clone: yes
+          update: yes  
+          force: yes
+
+      - name: maven package
+        apt:
+          name: maven
+          state: present    
+  
+      - name: build war
+        shell: mvn clean package -DskipTests
+        args:
+          chdir: /app/src 
+        register: build_output
+        ignore_errors: yes
+
+      - name: Debug Maven output
+        debug: 
+          var: build_output
+
+      - name: Check if WAR file exists
+        stat:
+          path: /app/src/web/app/target/geoserver.war
+        register: war_file_stat    
+
+      - name: Ensure correct permissions for the WAR file
+        file:
+          path: /app/src/web/app/target/geoserver.war
+          owner: root
+          group: root
+          mode: '0644'      
+        when: war_file_stat.stat.exists   
+  
+      - name: Copy war file to production node
+        copy:
+          src: /app/src/web/app/target/geoserver.war
+          dest: /tmp/geoserver.war
+          remote_src: yes
+          mode: '0644'
+        become: yes  
+        delegate_to: 158.160.134.42
+  
+  - name: Run production environment
+    hosts: 158.160.134.42
+    become: yes
+    tasks:
+      - name: apt package
+        apt:
+          name: tomcat9
+          state: present
+          
+      - name: copy war file in prod
+        copy: 
+          src: /tmp/geoserver.war
+          dest: /var/lib/tomcat9/webapps/geoserver.war
+          remote_src: yes
+        
+      - name: tomcat started
+        service:
+          name: tomcat9
+          state: started
+          enabled: yes    
+  
+      - name: Verify application is running
+        uri:
+          url: http://158.160.134.42:8080/geoserver
+          status_code: 200
+          validate_certs: no
+        register: geo_server_status
+  
+      - name: Debug application status
+        debug:
+          var: geo_server_status
+  
+
+
+
